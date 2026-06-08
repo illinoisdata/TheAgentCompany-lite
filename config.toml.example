@@ -1,0 +1,11 @@
+[llm.agent]
+model = "azure/<your-deployment-name>"
+base_url = "https://<your-resource>.cognitiveservices.azure.com"
+api_key = "<your-api-key>"
+api_version = "2024-12-01-preview"
+
+[llm.env]
+model = "azure/<your-deployment-name>"
+base_url = "https://<your-resource>.cognitiveservices.azure.com"
+api_key = "<your-api-key>"
+api_version = "2024-12-01-preview"

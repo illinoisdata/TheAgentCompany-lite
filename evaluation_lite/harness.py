@@ -20,6 +20,66 @@ MAGENTA = "\033[35m"
 RESET = "\033[0m"
 
 
+def _should_use_host_network() -> bool:
+    """Use host networking only where it's dependable.
+
+    OpenHands' host-network path works best on Linux. On macOS, especially with
+    Colima, the runtime container may start but never become reachable from the
+    client. Allow an explicit override via TAC_USE_HOST_NETWORK=1/0.
+    """
+    override = os.getenv("TAC_USE_HOST_NETWORK")
+    if override is not None:
+      return override.strip().lower() in {"1", "true", "yes", "on"}
+    return sys.platform.startswith("linux")
+
+
+def _runtime_startup_env_vars() -> dict[str, str]:
+    """Conservative runtime defaults for local macOS/Colima setups."""
+    env: dict[str, str] = {}
+    max_memory = os.getenv("TAC_RUNTIME_MAX_MEMORY_GB")
+    if max_memory:
+        env["RUNTIME_MAX_MEMORY_GB"] = max_memory
+    elif sys.platform == "darwin":
+        env["RUNTIME_MAX_MEMORY_GB"] = "1"
+    return env
+
+
+def _docker_runtime_kwargs() -> dict:
+    """Container runtime limits that help avoid OOM kills on small local VMs."""
+    kwargs: dict = {}
+    mem_limit = os.getenv("TAC_RUNTIME_MEM_LIMIT")
+    if mem_limit:
+        kwargs["mem_limit"] = mem_limit
+    elif sys.platform == "darwin":
+        kwargs["mem_limit"] = "1536m"
+    kwargs["shm_size"] = "2g"
+    return kwargs
+
+
+def _format_runtime_start_failure(runtime, error: Exception) -> Exception:
+    """Attach container logs when the runtime exits during connect()."""
+    try:
+        container_name = getattr(runtime, "container_name", None)
+        docker_client = getattr(runtime, "docker_client", None)
+        if container_name and docker_client is not None:
+            container = docker_client.containers.get(container_name)
+            logs = container.logs(tail=200).decode("utf-8", errors="replace").strip()
+            state = container.attrs.get("State", {})
+            status = state.get("Status", "unknown")
+            exit_code = state.get("ExitCode", "unknown")
+            oom_killed = state.get("OOMKilled", False)
+            wrapped = RuntimeError(
+                f"Runtime startup failed for container {container_name} "
+                f"(status={status}, exit_code={exit_code}, oom_killed={oom_killed}).\n"
+                f"Container logs:\n{logs}"
+            )
+            wrapped.__cause__ = error
+            return wrapped
+    except Exception:
+        pass
+    return error
+
+
 def _truncate(s, max_len=300):
     s = s.strip()
     if len(s) <= max_len:
@@ -200,7 +260,7 @@ class OpenHandsHarness(BaseHarness):
 
         try:
             result = subprocess.run(
-                ["docker", "build", "-t", tag, task_dir],
+                ["docker", "build", "--network", "host", "-t", tag, task_dir],
                 capture_output=True, text=True, timeout=120,
             )
             if result.returncode != 0:
@@ -242,15 +302,24 @@ class OpenHandsHarness(BaseHarness):
             dockerfile_path = os.path.join(d, "Dockerfile")
             with open(dockerfile_path, "a") as f:
                 f.write('RUN pip install "setuptools<70"\n')
-            logger.info(f"Building OpenHands runtime image {tag} (first run takes 10-20 min)...")
+            buildx_check = subprocess.run(
+                ["docker", "buildx", "version"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if buildx_check.returncode == 0:
+                build_cmd = ["docker", "buildx", "build", "--progress=plain",
+                             "--network", "host", "-t", tag, "--load", d]
+            else:
+                logger.info("Docker buildx is unavailable; falling back to plain 'docker build'")
+                build_cmd = ["docker", "build", "--network", "host", "-t", tag, d]
             result = subprocess.run(
-                ["docker", "buildx", "build", "--progress=plain",
-                 "-t", tag, "--load", d],
+                build_cmd,
                 capture_output=True, text=True, timeout=1800,
             )
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"Failed to build runtime image:\n{result.stderr[-2000:]}"
+                    f"Failed to build runtime image with {' '.join(build_cmd)}:\n"
+                    f"{(result.stderr or result.stdout)[-2000:]}"
                 )
             logger.info(f"Runtime image {tag} built successfully")
         finally:
@@ -272,9 +341,11 @@ class OpenHandsHarness(BaseHarness):
 
         sandbox = SandboxConfig(
             base_container_image=effective_base,
-            use_host_network=True,
+            use_host_network=_should_use_host_network(),
             timeout=300,
             keep_runtime_alive=True,
+            runtime_startup_env_vars=_runtime_startup_env_vars(),
+            docker_runtime_kwargs=_docker_runtime_kwargs(),
         )
         if runtime_image:
             sandbox.runtime_container_image = runtime_image
@@ -290,7 +361,10 @@ class OpenHandsHarness(BaseHarness):
         )
         config.set_llm_config(self.llm_config)
         runtime = create_runtime(config=config)
-        call_async_from_sync(runtime.connect)
+        try:
+            call_async_from_sync(runtime.connect)
+        except Exception as e:
+            raise _format_runtime_start_failure(runtime, e)
         self._runtime = runtime
         self.config = config
         self._mount_path = mount_path
