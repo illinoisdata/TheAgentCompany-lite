@@ -1,8 +1,10 @@
 __pycache__/
 *.pyc
 .venv/
+.uv-cache/
 config.toml
 outputs/
+outputs*/
 outputs_mock/
 uv.lock
 *.tar.gz

@@ -9,9 +9,19 @@ A faster, parallelized evaluation infrastructure for [TheAgentCompany](https://g
 
 Uses the same [OpenHands](https://github.com/All-Hands-AI/OpenHands) config and task format as upstream — just swap the runner.
 
-Quick test with no external services needed:
+> **Pre-requisite:** Before running any test commands, ensure you have **Docker** (Docker Desktop on macOS) installed and running, then run the installer to set up submodules, virtual environments, and base Docker images:
+> ```bash
+> # For macOS:
+> ./scripts/macos_eval.sh install
+> # For Linux / Generic setup:
+> make setup-full
+> ```
+
+Quick test with no external services needed (after running setup):
 
 ```bash
+./scripts/macos_eval.sh test   # macOS smoke test
+# or:
 make single TASK=ds-sql-exercise
 ```
 
@@ -28,6 +38,44 @@ make single TASK=ds-sql-exercise   # quick real task (no external services neede
 ```
 
 > **Note**: The first run of any task takes 10-20 minutes to build the OpenHands runtime image. Subsequent runs start in seconds.
+
+## macOS Quick Start
+
+If you are on macOS, the helper script gives you a safer first-run flow than the raw `make` targets:
+
+```bash
+git clone git@github.com:illinoisdata/TheAgentCompany-lite.git && cd TheAgentCompany-lite
+./scripts/macos_eval.sh check
+./scripts/macos_eval.sh install
+./scripts/macos_eval.sh test
+./scripts/macos_eval.sh report
+```
+
+What this does:
+
+- Uses a repo-local `uv` cache so sandboxed or restricted environments do not fail on `~/.cache/uv`.
+- Initializes the `TheAgentCompany` submodule automatically.
+- Creates a local `.venv` with the OpenHands dependency set.
+- Defaults `test` to a one-task mock smoke run, so a new user gets a fast validation before trying a full benchmark.
+- Treats Docker as optional for mock setup, but still checks and reports Docker readiness for real evals.
+
+Common follow-ups:
+
+```bash
+./scripts/macos_eval.sh test --mode mock --scope full
+./scripts/macos_eval.sh test --mode single --task ds-sql-exercise
+./scripts/macos_clean.sh
+```
+
+> **Note**: In mock mode, PASS/FAIL is simulated. A completed run means the local workflow is working even if the mock task result is `FAIL`.
+
+If `config.toml` is already set up and you want to run the real SQL exercise with verbose internal steps:
+
+```bash
+./scripts/macos_eval.sh test --mode single --task ds-sql-exercise
+```
+
+That path uses `[llm.agent]` and `[llm.env]` from `config.toml`, enables `--verbose`, and writes results to `./outputs`.
 
 Tasks that depend on GitLab, RocketChat, ownCloud, or Plane need those services running first. See [docs/SETUP.md](#2-server-setup-services) for service deployment. The harness starts services on-demand via `ensure_services()` when you run a task that needs them.
 
@@ -65,6 +113,22 @@ api_version = "2024-12-01-preview"
 
 > **Important:** The `model` field must start with `azure/` prefix so litellm routes to Azure OpenAI. `base_url` should be just the endpoint, not the full deployment path.
 
+For Azure AI Foundry / Azure AI Studio Project Unified Endpoints:
+
+```toml
+[llm.agent]
+model = "openai/<your-deployment-name>"
+base_url = "https://<your-resource>.services.ai.azure.com/api/projects/<your-project-name>/openai/v1"
+api_key = "<your-api-key>"
+
+[llm.env]
+model = "openai/<your-deployment-name>"
+base_url = "https://<your-resource>.services.ai.azure.com/api/projects/<your-project-name>/openai/v1"
+api_key = "<your-api-key>"
+```
+
+> **Important:** For Azure AI Foundry unified project endpoints, use the `openai/` model prefix and append `/openai/v1` to your base URL. This enables standard OpenAI compatibility mode and bypasses date-based API versioning requirements.
+
 `--agent-llm-config agent` maps to `[llm.agent]`, `--env-llm-config env` maps to `[llm.env]`. For mock mode, the config file is not needed.
 
 ## Prerequisites
@@ -72,7 +136,7 @@ api_version = "2024-12-01-preview"
 | Requirement | Linux (Ubuntu/Debian) | macOS |
 |---|---|---|
 | **Docker** 24+ | `sudo apt-get install -y docker.io` | [Docker Desktop](https://docs.docker.com/desktop/setup/install/mac-install/) (includes BuildX + Compose) |
-| **Docker BuildX** | `sudo apt-get install -y docker-buildx-plugin` | Included in Docker Desktop |
+| **Docker BuildX** | `sudo apt-get install -y docker-buildx-plugin` | Included in Docker Desktop (or auto-configured via helper script if missing) |
 | **Docker Compose v2** | `sudo apt-get install -y docker-compose-v2` | Included in Docker Desktop |
 | **Python** 3.12+ | System package or pyenv | `brew install python@3.12` |
 | **uv** | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `brew install uv` or same curl command |
@@ -98,6 +162,10 @@ docker pull ghcr.io/haochengxia/theagentcompany-lite-base:latest || make build-b
 ```
 
 > **Note**: If `docker pull` fails (private registry or no access), `make build-base` builds the image locally from source (~5 min first time).
+>
+> **macOS note:** `./scripts/macos_eval.sh install` is recommended for first-time setup because it handles the submodule, local `uv` cache, automatically installs and configures the `docker-buildx` plugin (critical for Colima users where the legacy builder fails with network packet issues), and performs friendlier Docker checks.
+>
+> **Apple Silicon (M1/M2/M3/M4) Note:** Headless Chromium inside Playwright can crash under QEMU emulation if you use `amd64` images. The `./scripts/macos_eval.sh install` script automatically detects Apple Silicon hosts and builds the base image locally to run natively as `arm64`, and configures the container with `shm_size='2g'` to ensure smooth, crash-free browser operations.
 
 ## Usage
 

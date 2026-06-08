@@ -8,6 +8,24 @@ import tempfile
 import base64
 import logging
 
+def _setup_docker_host():
+    if "DOCKER_HOST" in os.environ:
+        return
+    try:
+        res = subprocess.run(
+            ["docker", "context", "ls", "--format", "{{if .Current}}{{.DockerEndpoint}}{{end}}"],
+            capture_output=True, text=True, timeout=5
+        )
+        if res.returncode == 0:
+            endpoint = res.stdout.strip()
+            if endpoint:
+                os.environ["DOCKER_HOST"] = endpoint
+                logging.getLogger(__name__).info(f"Auto-configured DOCKER_HOST to active context endpoint: {endpoint}")
+    except Exception:
+        pass
+
+_setup_docker_host()
+
 from harness import BaseHarness, OpenHandsHarness, DockerHarness
 
 logger = logging.getLogger(__name__)
@@ -206,6 +224,7 @@ def _build_port_overrides(service_instance: dict | None) -> dict | None:
 
 if __name__ == "__main__":
     import argparse
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s:%(levelname)s - %(message)s")
 
     parser = argparse.ArgumentParser(description="TheAgentCompany V2 - Single task evaluation")
     parser.add_argument("--task", type=str, default=None,
@@ -268,7 +287,9 @@ if __name__ == "__main__":
     env_api_key = None
     env_base_url = None
     env_model = None
-    temp_dir = os.path.abspath(os.getenv("TMPDIR") or tempfile.mkdtemp())
+    outputs_path = os.path.abspath(args.outputs_path)
+    os.makedirs(outputs_path, exist_ok=True)
+    temp_dir = os.path.join(outputs_path, ".tmp")
     mount_path = os.path.join(temp_dir, f"mount_{task_short_name}")
     os.makedirs(mount_path, exist_ok=True)
 
@@ -345,8 +366,6 @@ if __name__ == "__main__":
     init_task_env(harness, args.server_hostname, env_api_key, env_base_url, env_model,
                   port_overrides=port_overrides)
 
-    outputs_path = os.path.abspath(args.outputs_path)
-    os.makedirs(outputs_path, exist_ok=True)
 
     if isinstance(harness, OpenHandsHarness):
         from browsing import pre_login

@@ -1,14 +1,10 @@
 .PHONY: setup setup-full mock dry-run single build-base clean
 
 setup:
-	git submodule update --init --recursive
-	uv sync
-	docker pull ghcr.io/haochengxia/theagentcompany-lite-base:latest || $(MAKE) build-base
+	./scripts/macos_eval.sh install
 
 setup-full:
-	git submodule update --init --recursive
-	uv sync --extra openhands
-	docker pull ghcr.io/haochengxia/theagentcompany-lite-base:latest || $(MAKE) build-base
+	./scripts/macos_eval.sh install
 
 build-base:
 	@echo "Building base image locally (first time: ~5 min)..."

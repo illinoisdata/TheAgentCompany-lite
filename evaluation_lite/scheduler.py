@@ -75,15 +75,16 @@ def find_non_overlapping_groups(groups, max_groups=4):
 
 def run_task(task_name, agent_llm_config, env_llm_config, outputs_path,
              server_hostname, script_dir, harness="openhands",
-             base_image=None, service_instance=None):
+             base_image=None, service_instance=None, mock_enabled=False,
+             mock_duration_range=(10, 30)):
     """Run a single task via run_eval.py (or mock), return result dict."""
     task_dir = str(TASKS_DIR / task_name)
     start = time.time()
     tmpdir = os.path.join(outputs_path, f".tmp_{task_name}")
     os.makedirs(tmpdir, exist_ok=True)
     try:
-        if _MOCK_CONFIG.enabled:
-            lo, hi = _MOCK_CONFIG.duration_range
+        if mock_enabled:
+            lo, hi = mock_duration_range
             cmd = [sys.executable, str(Path(script_dir) / "run_eval_mock.py"),
                    "--task-dir", task_dir, "--outputs-path", outputs_path,
                    "--min-duration", str(lo), "--max-duration", str(hi)]
@@ -127,7 +128,8 @@ def run_task(task_name, agent_llm_config, env_llm_config, outputs_path,
 
 def run_group_sequential(group_key, task_names, agent_llm_config, env_llm_config,
                          outputs_path, server_hostname, script_dir, harness="openhands",
-                         base_image=None, service_instance=None):
+                         base_image=None, service_instance=None, mock_enabled=False,
+                         mock_duration_range=(10, 30)):
     """Run tasks in a group sequentially (they share services, need reset between)."""
     svc = ", ".join(group_key) if group_key else "(no deps)"
     results = []
@@ -147,12 +149,13 @@ def run_group_sequential(group_key, task_names, agent_llm_config, env_llm_config
                 err = data.get("error", "unknown")[:60]
                 print(f"  [{svc}] [{i}/{len(task_names)}] {task_name}: RE-RUN (prev error: {err})")
 
-        if service_instance and i > 1 and not _MOCK_CONFIG.enabled:
+        if service_instance and i > 1 and not mock_enabled:
             _reset_services_for_group(service_instance, group_key)
 
         print(f"  [{svc}] [{i}/{len(task_names)}] {task_name}: RUNNING...")
         result = run_task(task_name, agent_llm_config, env_llm_config, outputs_path,
-                          server_hostname, script_dir, harness, base_image, service_instance)
+                          server_hostname, script_dir, harness, base_image, service_instance,
+                          mock_enabled, mock_duration_range)
         status = "OK" if result["success"] else "FAIL"
         print(f"  [{svc}] [{i}/{len(task_names)}] {task_name}: {status} ({result['duration']}s)")
         results.append(result)
@@ -355,7 +358,8 @@ def main():
             for (gk, inst_id), (batch, info) in sub_groups.items():
                 future = executor.submit(run_group_sequential, gk, batch,
                     args.agent_llm_config, args.env_llm_config, outputs_path,
-                    args.server_hostname, str(SCRIPT_DIR), args.harness, args.base_image, info)
+                    args.server_hostname, str(SCRIPT_DIR), args.harness, args.base_image, info,
+                    args.mock, _MOCK_CONFIG.duration_range)
                 futures[future] = (gk, info)
 
             for future in as_completed(futures):
